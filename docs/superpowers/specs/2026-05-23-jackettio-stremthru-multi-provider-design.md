@@ -157,7 +157,7 @@ The resolver should:
 2. Select `debridServices[serviceIndex]`.
 3. Load torrent info by `torrentId`.
 4. Add or fetch the torrent through StremThru using the magnet when available.
-5. For torrent files, preserve Jackettio's private tracker passkey replacement before sending the torrent data where StremThru supports file upload. If StremThru only accepts links in the first pass, use magnet/hash flows and document that limitation.
+5. For torrent-file-only indexer results, preserve Jackettio's private tracker passkey replacement before handing data to the StremThru layer. If StremThru cannot accept the torrent file directly, the implementation must disable that uncached torrent with a clear info message instead of exposing an unsafe or non-working stream.
 6. Select the movie or episode file with Jackettio's existing `getFile` and `searchEpisodeFile` logic.
 7. Generate the direct link through StremThru.
 8. Apply MediaFlow proxy wrapping when enabled.
@@ -199,7 +199,7 @@ Failures for one configured provider must not remove streams from other configur
 
 ## Testing
 
-Jackettio currently has no test script. Add a minimal Node test setup if implementation scope allows, then add focused tests for:
+Jackettio currently has no test script. Add a minimal Node test setup and focused tests for:
 
 - Config normalization accepts supported services and drops malformed entries.
 - The service registry exposes the expected Nexio-Torii provider set.
