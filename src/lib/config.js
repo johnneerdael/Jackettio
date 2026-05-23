@@ -59,6 +59,7 @@ export default {
     hideUncached:  (process.env.DEFAULT_HIDE_UNCACHED || 'false') === 'true',
     indexers: commaListToArray(process.env.DEFAULT_INDEXERS || 'all'),
     indexerTimeoutSec: parseInt(process.env.DEFAULT_INDEXER_TIMEOUT_SEC || '60'),
+    debridServices: [],
     passkey: '',
     // If not defined, the original title is used for search. If defined, the title in the given language is used for search
     // format: ISO 639-1, example: en
