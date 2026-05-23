@@ -7,6 +7,8 @@ export default {
   jackettUrl: process.env.JACKETT_URL || 'http://localhost:9117',
   // Jacket API key
   jackettApiKey: process.env.JACKETT_API_KEY || '',
+  // StremThru base URL
+  stremthruUrl: process.env.STREMTHRU_URL || 'https://stremthrufortheweak.nhyira.dev',
   //  The Movie Database Access Token. Configure to use TMDB rather than cinemeta.
   tmdbAccessToken: process.env.TMDB_ACCESS_TOKEN || '', 
   // Data folder for cache database, torrent files ... Must be persistent in production
