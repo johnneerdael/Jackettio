@@ -1,10 +1,10 @@
 # Jackettio
 
-Selfhosted Stremio addon that resolve streams using Jackett and Debrid. It seamlessly integrates with private trackers.
+Selfhosted Stremio addon that resolve streams using Jackett and StremThru-backed Debrid providers. It seamlessly integrates with private trackers.
 
 ## Features
 
-- Resolve streams using Jackett and Debrid (debrid-link, alldebrid, real-debrid)
+- Resolve streams using Jackett and StremThru-backed Debrid providers (RealDebrid, TorBox, AllDebrid, Premiumize, Debrid-Link, Debrider, EasyDebrid, Offcloud, PikPak)
 - Public / Private trackers
 - TV packs priority
 - Sorting
@@ -112,6 +112,19 @@ docker run --env-file .env \
 ## Configuration
 
 Jackettio is designed for selfhosted, whether for personal or public use. As a server owner, effortlessly configure many settings with environement variables.
+
+Jackettio uses StremThru for debrid resolution. Configure one or more providers on the `/configure` page. The generated manifest stores providers as:
+
+```json
+{
+  "debridServices": [
+    {"service": "realdebrid", "apiKey": "YOUR_REALDEBRID_KEY"},
+    {"service": "premiumize", "apiKey": "YOUR_PREMIUMIZE_KEY"}
+  ]
+}
+```
+
+Enable "Display only cached torrents" to hide uncached provider streams.
 
 - **Addon ID** `ADDON_ID` Change the `id` field in stremio manifest
 - **Default user settings:** `DEFAULT_*` All default settings available for user configuration on the /configure page are fully customizable
