@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {expandTorrentsByService, searchEpisodeFile, getFile} from '../src/lib/streamMapping.js';
+import {buildDownloadPath} from '../src/lib/jackettio.js';
 
 const torrents = [
   {
@@ -98,4 +99,20 @@ test('expandTorrentsByService skips cached series without matching episode file'
   });
 
   assert.deepEqual(items, []);
+});
+
+test('buildDownloadPath includes service index and opaque config payload', () => {
+  const path = buildDownloadPath({
+    publicUrl: 'https://addon.example',
+    userConfig: {debridServices: [{service: 'realdebrid', apiKey: 'secret'}]},
+    serviceIndex: 1,
+    type: 'movie',
+    stremioId: 'tt123',
+    torrentId: 'torrent-a',
+    name: 'Movie A.mkv'
+  });
+
+  assert.match(path, /^https:\/\/addon\.example\/eyJ/);
+  assert.match(path, /\/download\/1\/movie\/tt123\/torrent-a\/Movie%20A\.mkv$/);
+  assert.equal(path.includes('/secret/'), false);
 });

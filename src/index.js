@@ -13,6 +13,7 @@ import * as debrid from './lib/debrid.js';
 import {getIndexers} from './lib/jackett.js';
 import * as jackettio from "./lib/jackettio.js";
 import {cleanTorrentFolder, createTorrentFolder} from './lib/torrentInfos.js';
+import {getProviderLabel, normalizeUserConfig} from './lib/userConfig.js';
 
 const converter = new showdown.Converter();
 const welcomeMessageHtml = config.welcomeMessage ? `${converter.makeHtml(config.welcomeMessage)}<div class="my-4 border-top border-secondary-subtle"></div>` : '';
@@ -127,9 +128,9 @@ app.get("/:userConfig?/manifest.json", async(req, res) => {
     behaviorHints: {configurable: true}
   };
   if(req.params.userConfig){
-    const userConfig = JSON.parse(atob(req.params.userConfig));
-    const debridInstance = debrid.instance(userConfig);
-    manifest.name += ` ${debridInstance.shortName}`;
+    const userConfig = await normalizeUserConfig(JSON.parse(atob(req.params.userConfig)));
+    const providerLabel = getProviderLabel(userConfig.debridServices);
+    if(providerLabel)manifest.name += ` ${providerLabel}`;
   }
   respond(res, manifest);
 });
@@ -166,7 +167,7 @@ app.get("/stream/:type/:id.json", async(req, res) => {
 
 });
 
-app.use('/:userConfig/download/:type/:id/:torrentId/:name?', async(req, res, next) => {
+app.use('/:userConfig/download/:serviceIndex/:type/:id/:torrentId/:name?', async(req, res, next) => {
 
   if (req.method !== 'GET' && req.method !== 'HEAD'){
     return next();
@@ -176,6 +177,7 @@ app.use('/:userConfig/download/:type/:id/:torrentId/:name?', async(req, res, nex
 
     const url = await jackettio.getDownload(
       Object.assign(JSON.parse(atob(req.params.userConfig)), {ip: req.clientIp}),
+      req.params.serviceIndex,
       req.params.type, 
       req.params.id, 
       req.params.torrentId

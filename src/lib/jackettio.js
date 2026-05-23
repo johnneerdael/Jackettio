@@ -2,11 +2,13 @@ import pLimit from 'p-limit';
 import {parseWords, numberPad, sortBy, bytesToSize, wait, promiseTimeout} from './util.js';
 import config from './config.js';
 import cache from './cache.js';
-import { updateUserConfigWithMediaFlowIp, applyMediaflowProxyIfNeeded } from './mediaflowProxy.js';
+import { applyMediaflowProxyIfNeeded } from './mediaflowProxy.js';
 import * as meta from './meta.js';
 import * as jackett from './jackett.js';
 import * as debrid from './debrid.js';
 import * as torrentInfos from './torrentInfos.js';
+import {normalizeUserConfig, requireDebridService} from './userConfig.js';
+import {expandTorrentsByService, getFile} from './streamMapping.js';
 
 const slowIndexers = {};
 
@@ -32,10 +34,7 @@ async function getMetaInfos(type, stremioId, language){
 }
 
 async function mergeDefaultUserConfig(userConfig){
-  config.immulatableUserConfigKeys.forEach(key => delete userConfig[key]);
-  userConfig = Object.assign({}, config.defaultUserConfig, userConfig);
-  userConfig = await updateUserConfigWithMediaFlowIp(userConfig);
-  return userConfig;
+  return normalizeUserConfig(userConfig);
 }
 
 function priotizeItems(allItems, priotizeItems, max){
@@ -49,14 +48,6 @@ function priotizeItems(allItems, priotizeItems, max){
     allItems.unshift(...priotizeItems);
   }
   return allItems;
-}
-
-function searchEpisodeFile(files, season, episode){
-  return files.find(file => file.name.includes(`S${numberPad(season, 2)}E${numberPad(episode, 3)}`))
-    || files.find(file => file.name.includes(`S${numberPad(season, 2)}E${numberPad(episode, 2)}`))
-    || files.find(file => file.name.includes(`${season}${numberPad(episode, 2)}`))
-    || files.find(file => file.name.includes(`${numberPad(episode, 2)}`))
-    || false;
 }
 
 function getSlowIndexerStats(indexerId){
@@ -84,7 +75,7 @@ async function timeoutIndexerSearch(indexerId, promise, timeout){
   return res;
 }
 
-async function getTorrents(userConfig, metaInfos, debridInstance){
+async function getTorrents(userConfig, metaInfos){
 
   while(actionInProgress.getTorrents[metaInfos.stremioId]){
     await wait(500);
@@ -93,7 +84,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
 
   try {
 
-    const {qualities, excludeKeywords, maxTorrents, sortCached, sortUncached, priotizePackTorrents, priotizeLanguages, indexerTimeoutSec} = userConfig;
+    const {qualities, excludeKeywords, maxTorrents, priotizePackTorrents, priotizeLanguages, indexerTimeoutSec} = userConfig;
     const {id, season, episode, type, stremioId, year} = metaInfos;
 
     let torrents = [];
@@ -220,50 +211,13 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
       throw new Error(`No torrent infos for type ${type} and id ${stremioId}`);
     }
 
-    if(debridInstance){
-
-      try {
-
-        const isValidCachedFiles = type == 'series' ? files => !!searchEpisodeFile(files, season, episode) : files => true;
-        const cachedTorrents = (await debridInstance.getTorrentsCached(torrents, isValidCachedFiles)).map(torrent => {
-          torrent.isCached = true;
-          return torrent;
-        });
-        const uncachedTorrents = torrents.filter(torrent => cachedTorrents.indexOf(torrent) === -1);
-
-        if(config.replacePasskey && !(userConfig.passkey && userConfig.passkey.match(new RegExp(config.replacePasskeyPattern)))){
-          uncachedTorrents.forEach(torrent => {
-            if(torrent.infos.private){
-              torrent.disabled = true;
-              torrent.infoText = 'Uncached torrent require a passkey configuration';
-            }
-          });
+    if(config.replacePasskey && !(userConfig.passkey && userConfig.passkey.match(new RegExp(config.replacePasskeyPattern)))){
+      torrents.forEach(torrent => {
+        if(torrent.infos.private){
+          torrent.disabled = true;
+          torrent.infoText = 'Uncached torrent require a passkey configuration';
         }
-
-        console.log(`${stremioId} : ${cachedTorrents.length} cached torrents on ${debridInstance.shortName}`);
-
-        torrents = priotizeItems(cachedTorrents.sort(sortBy(...sortCached)), filterLanguage);
-
-        if(!userConfig.hideUncached || !debrid.cacheCheckAvailable){
-          torrents.push(...priotizeItems(uncachedTorrents.sort(sortBy(...sortUncached)), filterLanguage));
-        }
-      
-        const progress = await debridInstance.getProgressTorrents(torrents);
-        torrents.forEach(torrent => torrent.progress = progress[torrent.infos.infoHash] || null);
-
-      }catch(err){
-
-        console.log(`${stremioId} : ${debridInstance.shortName} : ${err.message || err}`);
-
-        if(err.message == debrid.ERROR.EXPIRED_API_KEY){
-          torrents.forEach(torrent => {
-            torrent.disabled = true;
-            torrent.infoText = 'Unable to verify cache (+): Expired Debrid API Key.';
-          });
-        }
-
-      }
-
+      });
     }
 
     return torrents;
@@ -276,7 +230,7 @@ async function getTorrents(userConfig, metaInfos, debridInstance){
 
 }
 
-async function prepareNextEpisode(userConfig, metaInfos, debridInstance){
+async function prepareNextEpisode(userConfig, metaInfos){
 
   try {
 
@@ -287,13 +241,15 @@ async function prepareNextEpisode(userConfig, metaInfos, debridInstance){
     if(nextEpisode){
 
       metaInfos = await meta.getEpisodeById(metaInfos.id, nextEpisode.season, nextEpisode.episode, userConfig.metaLanguage);
-      const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
+      const torrents = await getTorrents(userConfig, metaInfos);
 
       // Cache next episode on debrid when not cached
-      if(userConfig.forceCacheNextEpisode && torrents.length && !torrents.find(torrent => torrent.isCached)){
+      if(userConfig.forceCacheNextEpisode && torrents.length){
         console.log(`${stremioId} : Force cache next episode (${metaInfos.episode}) on debrid`);
         const bestTorrent = torrents.find(torrent => !torrent.disabled);
-        if(bestTorrent)await getDebridFiles(userConfig, bestTorrent.infos, debridInstance);
+        if(bestTorrent && userConfig.debridServices.length){
+          await getDebridFiles(userConfig, bestTorrent.infos, userConfig.debridServices[0]);
+        }
       }
 
     }
@@ -308,11 +264,11 @@ async function prepareNextEpisode(userConfig, metaInfos, debridInstance){
 
 }
 
-async function getDebridFiles(userConfig, infos, debridInstance){
+async function getDebridFiles(userConfig, infos, serviceEntry){
 
   if(infos.magnetUrl){
 
-    return debridInstance.getFilesFromMagnet(infos.magnetUrl, infos.infoHash);
+    return debrid.getFilesFromMagnet(infos.magnetUrl, serviceEntry);
 
   }else{
 
@@ -321,7 +277,7 @@ async function getDebridFiles(userConfig, infos, debridInstance){
     if(config.replacePasskey){
 
       if(infos.private && !userConfig.passkey){
-        return debridInstance.getFilesFromHash(infos.infoHash);
+        return debrid.getFilesFromHash(infos.infoHash, serviceEntry);
       }
 
       if(!userConfig.passkey.match(new RegExp(config.replacePasskeyPattern))){
@@ -339,62 +295,79 @@ async function getDebridFiles(userConfig, infos, debridInstance){
 
     }
 
-    return debridInstance.getFilesFromBuffer(buffer, infos.infoHash);
+    throw new Error('Torrent file upload through StremThru is not supported for this stream');
 
   }
 
 }
 
-function getFile(files, type, season, episode){
-  files = files.sort(sortBy('size', true));
-  if(type == 'movie'){
-    return files[0];
-  }else if(type == 'series'){
-    return searchEpisodeFile(files, season, episode) || files[0];
-  }
+export function buildDownloadPath({publicUrl, userConfig, serviceIndex, type, stremioId, torrentId, name}){
+  const payload = btoa(JSON.stringify(userConfig));
+  const encodedName = encodeURIComponent(name || '');
+  return `${publicUrl}/${payload}/download/${serviceIndex}/${type}/${stremioId}/${torrentId}/${encodedName}`;
 }
 
 export async function getStreams(userConfig, type, stremioId, publicUrl){
 
   userConfig = await mergeDefaultUserConfig(userConfig);
   const {id, season, episode} = parseStremioId(stremioId);
-  const debridInstance = debrid.instance(userConfig);
+  if(!userConfig.debridServices.length){
+    throw new Error('At least one debrid service is required');
+  }
 
   let metaInfos = await getMetaInfos(type, stremioId, userConfig.metaLanguage);
 
-  const torrents = await getTorrents(userConfig, metaInfos, debridInstance);
+  const torrents = await getTorrents(userConfig, metaInfos);
+  const streamItems = await expandTorrentsByService({
+    torrents,
+    services: userConfig.debridServices,
+    type,
+    season,
+    episode,
+    hideUncached: userConfig.hideUncached,
+    checkCached: debrid.getTorrentsCached
+  });
 
   // Prepare next expisode torrents list
   if(type == 'series'){
-    prepareNextEpisode({...userConfig, forceCacheNextEpisode: false}, metaInfos, debridInstance);
+    prepareNextEpisode({...userConfig, forceCacheNextEpisode: false}, metaInfos);
   }
 
-  return torrents.map(torrent => {
-    const file = getFile(torrent.infos.files || [], type, season, episode) || {};
+  return streamItems.map(({torrent, service, serviceIndex, isCached, files}) => {
+    const file = getFile(files || [], type, season, episode) || {};
     const quality = torrent.quality > 0 ? config.qualities.find(q => q.value == torrent.quality).label : '';
     const rows = [torrent.name];
     if(type == 'series' && file.name)rows.push(file.name);
     if(torrent.infoText)rows.push(`ℹ️ ${torrent.infoText}`);
     rows.push([`💾${bytesToSize(file.size || torrent.size)}`, `👥${torrent.seeders}`, `⚙️${torrent.indexerId}`, ...(torrent.languages || []).map(language => language.emoji)].join(' '));
-    if(torrent.progress && !torrent.isCached){
+    if(torrent.progress && !isCached){
       rows.push(`⬇️ ${torrent.progress.percent}% ${bytesToSize(torrent.progress.speed)}/s`);
     }
+    const shortName = debrid.serviceShortName(service);
     return {
-      name: `[${debridInstance.shortName}${torrent.isCached ? '+' : ''}] ${userConfig.enableMediaFlow ? '🕵🏼‍♂️ ' : ''}${config.addonName} ${quality}`,
+      name: `[${shortName}${isCached ? '+' : ''}] ${userConfig.enableMediaFlow ? '🕵🏼‍♂️ ' : ''}${config.addonName} ${quality}`,
       title: rows.join("\n"),
-      url: torrent.disabled ? '#' : `${publicUrl}/${btoa(JSON.stringify(userConfig))}/download/${type}/${stremioId}/${torrent.id}/${file.name || torrent.name}`
+      url: torrent.disabled ? '#' : buildDownloadPath({
+        publicUrl,
+        userConfig,
+        serviceIndex,
+        type,
+        stremioId,
+        torrentId: torrent.id,
+        name: file.name || torrent.name
+      })
     };
   });
 
 }
 
-export async function getDownload(userConfig, type, stremioId, torrentId){
+export async function getDownload(userConfig, serviceIndex, type, stremioId, torrentId){
 
   userConfig = await mergeDefaultUserConfig(userConfig);
-  const debridInstance = debrid.instance(userConfig);
+  const serviceEntry = requireDebridService(userConfig, serviceIndex);
   const infos = await torrentInfos.getById(torrentId);
   const {id, season, episode} = parseStremioId(stremioId);
-  const cacheKey = `download:2:${await debridInstance.getUserHash()}${userConfig.enableMediaFlow ? ':mfp': ''}:${stremioId}:${torrentId}`;
+  const cacheKey = `download:3:${debrid.getAccountHash(serviceEntry)}${userConfig.enableMediaFlow ? ':mfp': ''}:${stremioId}:${torrentId}`;
   let files;
   let download;
   let waitMs = 0;
@@ -408,18 +381,19 @@ export async function getDownload(userConfig, type, stremioId, torrentId){
 
     // Prepare next expisode debrid cache
     if(type == 'series' && userConfig.forceCacheNextEpisode){
-      getMetaInfos(type, stremioId, userConfig.metaLanguage).then(metaInfos => prepareNextEpisode(userConfig, metaInfos, debridInstance));
+      getMetaInfos(type, stremioId, userConfig.metaLanguage).then(metaInfos => prepareNextEpisode(userConfig, metaInfos));
     }
 
     download = await cache.get(cacheKey);
     if(download)return download;
 
-    console.log(`${stremioId} : ${debridInstance.shortName} : ${infos.infoHash} : get files ...`);
-    files = await getDebridFiles(userConfig, infos, debridInstance);
-    console.log(`${stremioId} : ${debridInstance.shortName} : ${infos.infoHash} : ${files.length} files found`);
+    const shortName = debrid.serviceShortName(serviceEntry);
+    console.log(`${stremioId} : ${shortName} : ${infos.infoHash} : get files ...`);
+    files = await getDebridFiles(userConfig, infos, serviceEntry);
+    console.log(`${stremioId} : ${shortName} : ${infos.infoHash} : ${files.length} files found`);
 
 
-    download = await debridInstance.getDownload(getFile(files, type, season, episode));
+    download = await debrid.getDownload(getFile(files, type, season, episode), serviceEntry);
 
     if(download){
       download = applyMediaflowProxyIfNeeded(download, userConfig);
