@@ -120,15 +120,24 @@
             </div>
           </div>
           <div class="mb-3">
-            <label>Debrid provider:</label>
-            <select v-model="debrid" class="form-select" @change="form.debridId = debrid.id">
-              <option v-for="option in debrids" :value="option">{{ option.name }}</option>
-            </select>
-          </div>
-          <div v-for="field in debrid.configFields" class="mb-3">
-            <label>{{field.label}}:</label> 
-            <small v-if="field.href" class="ms-2"><a :href="field.href.value" target="_blank" rel="noreferrer">{{field.href.label}}</a></small>
-            <input type="{{field.type}}" v-model="field.value" class="form-control">
+            <label>Debrid providers:</label>
+            <div v-for="(entry, index) in form.debridServices" class="border border-secondary-subtle rounded p-2 mb-2">
+              <div class="d-flex gap-2 align-items-start">
+                <select v-model="entry.service" class="form-select">
+                  <option value="">Select provider</option>
+                  <option v-for="option in debrids" :value="option.id">{{ option.name }}</option>
+                </select>
+                <button type="button" class="btn btn-outline-danger" @click="removeDebridService(index)">Remove</button>
+              </div>
+              <div class="mt-2">
+                <label>API Key:</label>
+                <small v-if="getDebridOption(entry.service)?.href" class="ms-2">
+                  <a :href="getDebridOption(entry.service).href.value" target="_blank" rel="noreferrer">{{getDebridOption(entry.service).href.label}}</a>
+                </small>
+                <input type="password" v-model="entry.apiKey" class="form-control">
+              </div>
+            </div>
+            <button type="button" class="btn btn-outline-secondary" @click="addDebridService">Add provider</button>
           </div>
         </div>
 
@@ -177,7 +186,7 @@
         </div>
 
         <div class="my-3 d-flex align-items-center">
-          <button @click="configure" type="button" class="btn btn-primary" :disabled="!debrid.id">{{isUpdate ? 'Update' : 'Install'}}</button>
+          <button @click="configure" type="button" class="btn btn-primary" :disabled="form.debridServices.length == 0">{{isUpdate ? 'Update' : 'Install'}}</button>
           <div v-if="error" class="text-danger ms-2">{{error}}</div>
           <div class="ms-auto">
             <a v-if="manifestUrl" :href="manifestUrl">Stremio Link</a>
@@ -209,9 +218,8 @@
           if(config.userConfig){
             try {
               const savedUserConfig = JSON.parse(atob(config.userConfig));
+              savedUserConfig.debridServices = Array.isArray(savedUserConfig.debridServices) ? savedUserConfig.debridServices : [];
               Object.assign(defaultUserConfig, savedUserConfig);
-              debrid.value = debrids.find(debrid => debrid.id == savedUserConfig.debridId) || {};
-              debrid.value.configFields.forEach(field => field.value = savedUserConfig[field.name] || null);
               isUpdate = true;
             }catch(err){}
           }
@@ -220,7 +228,7 @@
             maxTorrents: defaultUserConfig.maxTorrents,
             priotizePackTorrents: defaultUserConfig.priotizePackTorrents,
             excludeKeywords: defaultUserConfig.excludeKeywords.join(','),
-            debridId: defaultUserConfig.debridId || '',
+            debridServices: (defaultUserConfig.debridServices || []).map(entry => ({...entry})),
             hideUncached: defaultUserConfig.hideUncached,
             sortCached: defaultUserConfig.sortCached,
             sortUncached: defaultUserConfig.sortUncached,
@@ -237,6 +245,22 @@
           qualities.forEach(quality => quality.checked = defaultUserConfig.qualities.includes(quality.value));
           indexers.forEach(indexer => indexer.checked = defaultUserConfig.indexers.includes(indexer.value) || defaultUserConfig.indexers.includes('all'));
 
+          function addDebridService(){
+            form.value.debridServices.push({service: debrids[0]?.id || '', apiKey: ''});
+          }
+
+          function removeDebridService(index){
+            form.value.debridServices.splice(index, 1);
+          }
+
+          function getDebridOption(serviceId){
+            return debrids.find(option => option.id == serviceId) || null;
+          }
+
+          if(form.value.debridServices.length == 0){
+            addDebridService();
+          }
+
           async function configure(){
             try {
               error.value = '';
@@ -244,13 +268,18 @@
               userConfig.qualities = qualities.filter(quality => quality.checked).map(quality => quality.value);
               userConfig.indexers = indexers.filter(indexer => indexer.checked).map(indexer => indexer.value);
               userConfig.excludeKeywords = form.value.excludeKeywords.split(',').filter(Boolean);
-              debrid.value.configFields.forEach(field => {
-                if(field.required && !field.value)throw new Error(`${field.label} is required`);
-                userConfig[field.name] = field.value
-              });
+              userConfig.debridServices = form.value.debridServices
+                .map(entry => ({service: entry.service, apiKey: String(entry.apiKey || '').trim()}))
+                .filter(entry => entry.service && entry.apiKey);
 
-              if(!userConfig.debridId){
-                throw new Error(`Debrid is required`);
+              if(!userConfig.debridServices.length){
+                throw new Error(`At least one Debrid provider is required`);
+              }
+
+              for(const entry of userConfig.debridServices){
+                if(!getDebridOption(entry.service)){
+                  throw new Error(`Unsupported Debrid provider: ${entry.service}`);
+                }
               }
 
               if(!userConfig.qualities.length){
@@ -301,7 +330,10 @@
             isUpdate,
             metaLanguages,
             showMediaFlowPassword,
-            toggleMediaFlowPassword
+            toggleMediaFlowPassword,
+            addDebridService,
+            removeDebridService,
+            getDebridOption
           }
         }
       }).mount('#app')
